@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # 扩展的唯一标识，需与目录名一致
 id = "MikuMikuImport_Pro"
 # 版本号
-version = "4.0.5"
+version = "5.2.6"
 # 插件名称
 name = "MMI Pro"
 # 简短描述
