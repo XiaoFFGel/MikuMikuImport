@@ -59,6 +59,11 @@ class Render2Operator(bpy.types.Operator):
         default='0',
         description="选择匹配模式"
     )
+    Transfer_UV: bpy.props.BoolProperty(
+        name="Transfer UV",
+        default=True,
+        description='网格完全一致时，把预设模板的 UV 传递给模型'
+    )
 
     def execute(self, context):
         global obj1, tyu, sun
@@ -209,6 +214,57 @@ class Render2Operator(bpy.types.Operator):
 
         mmi_object = []
 
+        def resolve_mmi_object(key):
+            """ 取出 MMI 部件：优先用本次实际追加进来的对象，避免命中场景里残留的同名僵尸对象 """
+            base = mmi_object_name[key]
+
+            def is_this(o):
+                if o.name == base:
+                    return True
+                if o.name.startswith(base + '.'):
+                    return o.name[len(base) + 1:].isdigit()
+                return False
+
+            # 1) 本次追加进来的（MMI_Mesh 或 MMI_Mesh.001）
+            for o in mmi_object:
+                try:
+                    if is_this(o):
+                        return o
+                except ReferenceError:
+                    continue  # 该对象已被删除，引用已失效
+            # 2) 当前视图层里真实存在的
+            for o in bpy.context.view_layer.objects:
+                if is_this(o):
+                    return o
+            # 3) 兜底：全局数据块（可能是残留对象）
+            return bpy.data.objects.get(base)
+
+        def safe_select(target):
+            """ 安全选中：对象不在当前视图层时不再抛 RuntimeError """
+            if target is None:
+                return False
+            try:
+                target.select_set(True)
+                return True
+            except RuntimeError:
+                try:
+                    bpy.context.scene.collection.objects.link(target)
+                    target.select_set(True)
+                    return True
+                except Exception:
+                    print(f"物体 '{target.name}' 不在当前视图层，已跳过")
+                    return False
+
+        # 清理上次异常中断留下的孤立 MMI 数据块
+        # （不属于任何集合 = 不在场景里，既看不见也可能被 bpy.data.objects.get() 误取到）
+        for orphan in list(bpy.data.objects):
+            if orphan.users_collection:
+                continue
+            if any(orphan.name == base or orphan.name.startswith(base + '.')
+                   for base in mmi_object_name.values()):
+                print(f"清理孤立对象：{orphan.name}")
+                bpy.data.objects.remove(orphan, do_unlink=True)
+
         # 追加集合
         Additional_actions('【MMD预设】','Collection')
 
@@ -249,7 +305,7 @@ class Render2Operator(bpy.types.Operator):
         print('模型名称：',punctuation)
 
         # 找到物体
-        shade_obj = bpy.data.objects.get(mmi_object_name["MMI_AAAAA"])
+        shade_obj = resolve_mmi_object('MMI_AAAAA')
 
         new_name = ''
         if shade_obj:
@@ -278,8 +334,8 @@ class Render2Operator(bpy.types.Operator):
         if bpy.context.active_object.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # 获取名称为 'MMI_AAAA' 的物体
-        obj = bpy.data.objects.get(mmi_object_name["MMI_AAAA"])
+        # 获取本次追加进来的模板本体
+        obj = resolve_mmi_object('MMI_AAAA')
 
         material_offsets =None
         thickness_rounded = None
@@ -525,20 +581,16 @@ class Render2Operator(bpy.types.Operator):
         # 恢复隐藏状态
         tyus.hide_set(hidden_state)
 
-        # 选择两个物体
-        object_names = [mmi_object_name["MMI_AAAA"], active_object.name]
+        # 选择两个物体（模板本体取本次实际追加进来的对象，避免命中残留的同名僵尸对象）
+        target_objects = [o for o in (resolve_mmi_object('MMI_AAAA'), active_object) if o is not None]
 
-        # 遍历这两个物体名称
-        for object_name in object_names:
-            # 尝试获取场景中的物体
-            obj = bpy.data.objects.get(object_name)
-            # 如果物体存在，选择它
-            if obj is not None:
-                obj.select_set(True)
+        # 遍历这两个物体
+        for target in target_objects:
+            safe_select(target)
 
         # 设置列表中的第一个物体为活动物体
-        if object_names:
-            bpy.context.view_layer.objects.active = bpy.data.objects.get(object_names[0])
+        if target_objects:
+            bpy.context.view_layer.objects.active = target_objects[0]
 
 
         # 核心代码
@@ -557,7 +609,7 @@ class Render2Operator(bpy.types.Operator):
 
             a_obj = active_object
 
-            b_obj = bpy.data.objects.get(object_names[0])
+            b_obj = resolve_mmi_object('MMI_AAAA')
 
             for a_materials in active_object.data.materials:
                 a_obj_list.append(a_materials.name)
@@ -576,39 +628,47 @@ class Render2Operator(bpy.types.Operator):
             print(b_obj_edge_list)
 
             def get_similarity(a, b, edge = False):
+                # 去掉 Blender 的数字后缀（.001/.002…）与描边前缀，得到可比较的基名
+                def base_name(name):
+                    base = name.split('.', 1)[0]
+                    if edge:
+                        base = base.replace('mmi-edge|', '')
+                    return base
+
+                used = set()  # 已被占用的目标材质，保证一对一，避免多个槽抢同一个材质
                 u = {}
-                if edge:
-                    # 遍历两个列表，计算相似度
-                    for i in a:
-                        i1 = i.split('.', 1)[0]
-                        best_match = 0
-                        best_j = None
-                        for j in b:
-                            j1 = j.split('.', 1)[0]
-                            # 去掉前缀
-                            j1 = j1.replace('mmi-edge|', '')
-                            matches = SequenceMatcher(None, i1, j1).ratio()
-                            if matches > 0.85 and matches > best_match:
-                                best_match = matches
-                                best_j = j
-                        if best_j is not None:
-                            print(f"{i} 和 {best_j} 的相似度为：{best_match}")
-                            u[i] = best_j
-                else:
-                    # 遍历两个列表，计算相似度
-                    for i in a:
-                        i1 = i.split('.', 1)[0]
-                        best_match = 0
-                        best_j = None
-                        for j in b:
-                            j1 = j.split('.', 1)[0]
-                            matches = SequenceMatcher(None, i1, j1).ratio()
-                            if matches > 0.85 and matches > best_match:
-                                best_match = matches
-                                best_j = j
-                        if best_j is not None:
-                            print(f"{i} 和 {best_j} 的相似度为：{best_match}")
-                            u[i] = best_j
+
+                # 第一轮：基名完全相同 -> 直接锁定，相似度视为 1.0
+                # 这里刻意不跳过 used：同一材质的多个副本（.001/.002）本来就该指向同一个目标
+                for i in a:
+                    i1 = base_name(i)
+                    for j in b:
+                        if base_name(j) == i1:
+                            print(f"{i} 和 {j} 的相似度为：1.0")
+                            u[i] = j
+                            used.add(j)
+                            break
+
+                # 第二轮：剩下的取相似度"最高"的目标
+                for i in a:
+                    if i in u:
+                        continue
+                    i1 = base_name(i)
+                    best_match = 0.0
+                    best_j = None
+                    for j in b:
+                        if j in used:
+                            continue
+                        matches = SequenceMatcher(None, i1, base_name(j)).ratio()
+                        if matches > best_match:
+                            best_match = matches
+                            best_j = j
+                    if best_j is not None and best_match > 0.85:
+                        print(f"{i} 和 {best_j} 的相似度为：{best_match}")
+                        u[i] = best_j
+                        used.add(best_j)
+                    else:
+                        print(f"{i} 没有找到匹配的材质（最高相似度：{best_match}）")
                 return u
 
             S_dictionary = get_similarity(a_obj_list, b_obj_list)
@@ -619,7 +679,7 @@ class Render2Operator(bpy.types.Operator):
 
                 # 更换材质
                 for slot in a_obj.material_slots:
-                    if slot.material.name == key:
+                    if slot.material and slot.material.name == key:
                         slot.material = bpy.data.materials.get(value)
 
             for key, value in edge_dictionary.items():
@@ -629,11 +689,84 @@ class Render2Operator(bpy.types.Operator):
                     if material.name == value:
                         a_obj.data.materials.append(material)
 
+        # 网格完全一致时，把模板的 UV 原样传过来
+        # （贴图对位、描边材质分区都依赖 UV，仅改材质名不够）
+        def same_topology(mesh_a, mesh_b):
+            """ 顶点/边/面/循环数一致且每个面的顶点索引完全相同 -> 视为同一个网格 """
+            if mesh_a is None or mesh_b is None or mesh_a == mesh_b:
+                return False
+            if len(mesh_a.vertices) != len(mesh_b.vertices):
+                return False
+            if len(mesh_a.edges) != len(mesh_b.edges):
+                return False
+            if len(mesh_a.polygons) != len(mesh_b.polygons):
+                return False
+            if len(mesh_a.loops) != len(mesh_b.loops):
+                return False
+            try:
+                import numpy as np
+                loops_a = np.empty(len(mesh_a.loops), dtype=np.int32)
+                loops_b = np.empty(len(mesh_b.loops), dtype=np.int32)
+                mesh_a.loops.foreach_get('vertex_index', loops_a)
+                mesh_b.loops.foreach_get('vertex_index', loops_b)
+                return bool(np.array_equal(loops_a, loops_b))
+            except Exception:
+                for i in range(len(mesh_a.polygons)):
+                    if list(mesh_a.polygons[i].vertices) != list(mesh_b.polygons[i].vertices):
+                        return False
+                return True
+
+        def transfer_uv_layers(src_mesh, dst_mesh):
+            """ 把源网格的 UV 层原样复制到目标网格，返回复制的层数 """
+            src_layers = list(src_mesh.uv_layers)
+            if not src_layers:
+                print("模板网格没有 UV 层，跳过")
+                return 0
+
+            # 清掉目标已有的 UV，避免同名层叠加（.001/.002）
+            while dst_mesh.uv_layers:
+                dst_mesh.uv_layers.remove(dst_mesh.uv_layers[0])
+
+            copied = 0
+            for src_layer in src_layers:
+                dst_layer = dst_mesh.uv_layers.new(name=src_layer.name)
+                count = len(src_layer.data)
+                if len(dst_layer.data) != count:
+                    print(f"UV 层 '{src_layer.name}' 的循环数不一致，跳过")
+                    continue
+                try:
+                    import numpy as np
+                    buf = np.empty(count * 2, dtype=np.float32)
+                    src_layer.data.foreach_get('uv', buf)
+                    dst_layer.data.foreach_set('uv', buf)
+                except Exception:
+                    for i in range(count):
+                        dst_layer.data[i].uv = src_layer.data[i].uv
+                copied += 1
+            return copied
+
+        template_mesh_obj = resolve_mmi_object('MMI_AAAA')
+        if not self.Transfer_UV:
+            print("UV 传递已关闭，跳过")
+        elif (template_mesh_obj is not None and active_object is not None
+                and active_object.type == 'MESH' and template_mesh_obj.type == 'MESH'):
+            if active_object.data == template_mesh_obj.data:
+                print("已共享同一份网格数据，UV 天然一致，无需传递")
+            elif same_topology(active_object.data, template_mesh_obj.data):
+                uv_count = transfer_uv_layers(template_mesh_obj.data, active_object.data)
+                print(f"网格完全一致，已传递 {uv_count} 层 UV")
+            else:
+                print("网格不一致，跳过 UV 传递")
+
 
         def delete_object(object_name):
             object_to_delete = bpy.data.objects.get(object_name)
             if object_to_delete is not None:
-                bpy.context.view_layer.objects.active = object_to_delete
+                try:
+                    bpy.context.view_layer.objects.active = object_to_delete
+                except RuntimeError:
+                    print(f"物体 '{object_name}' 不在当前视图层，跳过删除")
+                    return
                 # 遍历当前视图层中的所有物体
                 for obj in bpy.context.view_layer.objects:
                     # 取消每个物体的选择状态
@@ -643,11 +776,12 @@ class Render2Operator(bpy.types.Operator):
                 # 执行删除物体的操作
                 bpy.ops.object.delete()
 
-        # 定义一个列表
-        object_names = [mmi_object_name["MMI_AAAA"], mmi_object_name["MMI_AAA"], mmi_object_name["MMI_AA"]]
-        # 遍历物体名称列表，调用delete_object函数删除物体
-        for object_name in object_names:
-            delete_object(object_name)
+        # 删除本次追加进来的 MMI 本体部件（按实际名字，避免残留的同名对象删不掉）
+        # 先全部取出再删，避免删掉第一个后 mmi_object 列表里留下失效引用
+        objects_to_delete = [resolve_mmi_object(k) for k in ('MMI_AAAA', 'MMI_AAA', 'MMI_AA')]
+        for target in objects_to_delete:
+            if target is not None:
+                delete_object(target.name)
 
         # 遍历所有的物体，并选择它们
         for obj in bpy.context.view_layer.objects:
@@ -669,14 +803,27 @@ class Render2Operator(bpy.types.Operator):
                 target_obj.name = source_obj.name
 
         def rename_collection_to_selected_object_name(collection_name):
-            # 获取当前选中的物体
-            selected_object = bpy.context.view_layer.objects.active
-            if selected_object is None:
-                print("当前未选择任何对象。")
-                return
-
-            # 获取指定集合
-            collection = bpy.data.collections.get(collection_name)
+            # 只认本次追加进来的那个集合
+            # 场景里可能残留上一次的【MMD预设】（或者它已被改成上一个角色的名字），
+            # 重名时新集合会带 .001 后缀，直接 bpy.data.collections.get() 会命中旧集合
+            # 注意：mmi_object 里的 MMI_Mesh/MMI_Arm/MMI_Root 已在前面被删除，
+            # 直接取 .name 会抛 ReferenceError
+            new_names = set()
+            for o in mmi_object:
+                try:
+                    new_names.add(o.name)
+                except ReferenceError:
+                    continue
+            collection = None
+            for c in bpy.data.collections:
+                if c.name == collection_name or (
+                        c.name.startswith(collection_name + '.')
+                        and c.name[len(collection_name) + 1:].isdigit()):
+                    if any(o.name in new_names for o in c.objects):
+                        collection = c
+                        break
+            if collection is None:
+                collection = bpy.data.collections.get(collection_name)
             if collection is None:
                 print(f"集合 '{collection_name}' 未找到。")
                 return
@@ -686,6 +833,9 @@ class Render2Operator(bpy.types.Operator):
 
             # 从场景中获取这个物体
             object = bpy.data.objects.get(object_name)
+            if object is None:
+                print(f"模型物体 '{object_name}' 未找到，跳过集合重命名。")
+                return
             # 计算物体的世界空间位置坐标
             world_position = object.matrix_world @ mathutils.Vector((0, 0, 0))
 
@@ -709,9 +859,31 @@ class Render2Operator(bpy.types.Operator):
             else:
                 print(f"场景中未找到名为 '{lamp_name}' 的日光灯。")
 
-            new1_name = selected_object.name
+            # 命名依据必须是本次追加进来的日光灯，不能用"当前活动物体"
+            # 上面把场景里所有 SUN 灯都激活了一遍，active 很可能停在场景里
+            # 上一个角色遗留的灯上，集合就会被命名成那个角色，还因为重名带上 .001
+            new_lamp = None
+            for o in mmi_object:
+                try:
+                    if o.type == 'LIGHT' and o.data.type == 'SUN':
+                        new_lamp = o
+                        break
+                except ReferenceError:
+                    continue  # 该对象已被删除，引用已失效
+            if new_lamp is None and sun:
+                new_lamp = bpy.data.objects.get(sun)
+            if new_lamp is None:
+                new_lamp = bpy.context.view_layer.objects.active
+            if new_lamp is None:
+                print("未找到可用的日光灯，跳过集合重命名。")
+                return
+
+            new1_name = new_lamp.name
+            occupant = bpy.data.collections.get(new1_name)
+            if occupant is not None and occupant is not collection:
+                print(f"提示：场景中已存在集合 '{new1_name}'，本次集合会带 .001 后缀")
             collection.name = new1_name
-            print(f"集合 '{collection_name}' 已重命名为 '{new1_name}'。")
+            print(f"集合 '{collection_name}' 已重命名为 '{collection.name}'。")
 
 
         # 调用函数，将集合【MMD预设】的名称重命名为当前选中物体的名称
@@ -784,6 +956,7 @@ class Render2Operator(bpy.types.Operator):
 
         layout.label(text=i18n('Material matching:'))
         layout.prop(self, 'Fuzzy', text=i18n('Matching Pattern'), expand=True)
+        layout.prop(self, 'Transfer_UV', text=i18n('Transfer UV'))
 
 # 为选中模型设置眼透
 class SetEyeThroughSettings(bpy.types.Operator):

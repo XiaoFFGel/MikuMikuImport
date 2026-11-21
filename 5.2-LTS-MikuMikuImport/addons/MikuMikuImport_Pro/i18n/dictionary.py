@@ -57,6 +57,7 @@ dictionary = {
         ("", "Developer Options"): "开发人员选项",
         ("Operator", "Fix AMD graphics card synthesizer bug"): "修复AMD显卡合成器错误",
         ("", "Material matching:"): "材质匹配：",
+        ("", "Transfer UV"): "传递UV",
         ("", "Fuzzy search"): "模糊搜索",
         ("", "Traditional associations"): "传统关联",
         ("", "material"): "材质",
