@@ -789,11 +789,12 @@ class Render2Operator(bpy.types.Operator):
                 print("网格不一致，跳过 UV 传递")
 
         # 传递"描边权重"顶点组权重，网格完全一致时按顶点索引一一对应
+        stroke_weight_transferred = False
         if (template_mesh_obj is not None and active_object is not None
                 and active_object.type == 'MESH' and template_mesh_obj.type == 'MESH'
                 and active_object.data != template_mesh_obj.data
                 and same_topology(active_object.data, template_mesh_obj.data)):
-            transfer_stroke_weight(template_mesh_obj, active_object)
+            stroke_weight_transferred = transfer_stroke_weight(template_mesh_obj, active_object)
 
         def delete_object(object_name):
             object_to_delete = bpy.data.objects.get(object_name)
@@ -968,7 +969,16 @@ class Render2Operator(bpy.types.Operator):
 
             inputs = new_modifier.node_group.interface.items_tree
 
-            new_modifier[inputs["描边厚度"].identifier] = thickness_rounded
+            thickness_input_id = inputs["描边厚度"].identifier
+
+            if stroke_weight_transferred:
+                # 描边厚度改用"描边权重"顶点组驱动
+                new_modifier[thickness_input_id + "_use_attribute"] = True
+                new_modifier[thickness_input_id + "_attribute_name"] = "描边权重"
+            else:
+                new_modifier[thickness_input_id + "_use_attribute"] = False
+                new_modifier[thickness_input_id] = thickness_rounded
+            obj.update_tag()  # 标记刷新，让 depsgraph 重建修改器输入状态
             new_modifier[inputs["翻转面"].identifier] = vertex
             new_modifier[inputs["材质偏移"].identifier] = material_offsets
             new_modifier[inputs["描边合并"].identifier] = Stroke_merging
