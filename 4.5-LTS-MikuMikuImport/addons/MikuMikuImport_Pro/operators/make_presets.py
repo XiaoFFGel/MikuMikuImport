@@ -1748,15 +1748,25 @@ class EdgePreviewOperator(bpy.types.Operator):
         # 几何节点
         if not 'MMI-边缘预览' in obj_A.modifiers:
 
+            # 自动创建"描边权重"顶点组，所有顶点权重置为 1
+            stroke_group = obj_A.vertex_groups.get("描边权重")
+            if stroke_group is None:
+                stroke_group = obj_A.vertex_groups.new(name="描边权重")
+            stroke_group.add(list(range(len(obj_A.data.vertices))), 1.0, 'REPLACE')
+
             new_modifiers = obj_A.modifiers.new(name="MMI-边缘预览", type='NODES')
             new_modifiers.node_group = bpy.data.node_groups["MMI-自动描边"]
 
             inputs = new_modifiers.node_group.interface.items_tree
 
-            new_modifiers[inputs["描边厚度"].identifier] = 0.1
+            # 描边厚度由"描边权重"顶点组驱动（直接写属性模式标志，避免 toggle 的状态依赖）
+            thickness_input_id = inputs["描边厚度"].identifier
+            new_modifiers[thickness_input_id + "_use_attribute"] = True
+            new_modifiers[thickness_input_id + "_attribute_name"] = "描边权重"
             new_modifiers[inputs["翻转面"].identifier] = True
             new_modifiers[inputs["材质偏移"].identifier] = obj_A_material_number
             new_modifiers[inputs["描边合并"].identifier] = 0.0001
+            obj_A.update_tag()
 
             bpy.ops.mmi.update_stroke_list()
 
