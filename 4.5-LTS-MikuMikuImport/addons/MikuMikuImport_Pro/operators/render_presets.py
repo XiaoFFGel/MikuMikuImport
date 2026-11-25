@@ -746,18 +746,54 @@ class Render2Operator(bpy.types.Operator):
                 copied += 1
             return copied
 
+        def transfer_stroke_weight(src_obj, dst_obj, group_name="描边权重"):
+            """ 把模板的'描边权重'顶点组权重按顶点索引原样传给目标模型（要求网格完全一致） """
+            src_group = src_obj.vertex_groups.get(group_name)
+            if src_group is None:
+                print(f"模板没有 '{group_name}' 顶点组，跳过描边权重传递")
+                return False
+
+            # 目标已有同名组时先移除，确保权重被完全覆盖而不是叠加
+            dst_group = dst_obj.vertex_groups.get(group_name)
+            if dst_group is not None:
+                dst_obj.vertex_groups.remove(dst_group)
+            dst_group = dst_obj.vertex_groups.new(name=group_name)
+
+            transferred = 0
+            for v in src_obj.data.vertices:
+                for g in v.groups:
+                    if g.group == src_group.index:
+                        dst_group.add([v.index], g.weight, 'REPLACE')
+                        transferred += 1
+                        break
+            print(f"已传递 '{group_name}' 顶点组权重（{transferred} 个顶点）")
+            return True
+
         template_mesh_obj = resolve_mmi_object('MMI_AAAA')
+
         if not self.Transfer_UV:
             print("UV 传递已关闭，跳过")
+
+        # 只处理网格对象
         elif (template_mesh_obj is not None and active_object is not None
                 and active_object.type == 'MESH' and template_mesh_obj.type == 'MESH'):
+
             if active_object.data == template_mesh_obj.data:
                 print("已共享同一份网格数据，UV 天然一致，无需传递")
+
+            # 网格完全一致时，把模板的 UV 原样传过来
             elif same_topology(active_object.data, template_mesh_obj.data):
                 uv_count = transfer_uv_layers(template_mesh_obj.data, active_object.data)
                 print(f"网格完全一致，已传递 {uv_count} 层 UV")
             else:
                 print("网格不一致，跳过 UV 传递")
+
+        # 传递"描边权重"顶点组权重，网格完全一致时按顶点索引一一对应
+        if (template_mesh_obj is not None and active_object is not None
+                and active_object.type == 'MESH' and template_mesh_obj.type == 'MESH'
+                and active_object.data != template_mesh_obj.data
+                and same_topology(active_object.data, template_mesh_obj.data)):
+            transfer_stroke_weight(template_mesh_obj, active_object)
 
         def delete_object(object_name):
             object_to_delete = bpy.data.objects.get(object_name)
@@ -779,6 +815,7 @@ class Render2Operator(bpy.types.Operator):
         # 删除本次追加进来的 MMI 本体部件（按实际名字，避免残留的同名对象删不掉）
         # 先全部取出再删，避免删掉第一个后 mmi_object 列表里留下失效引用
         objects_to_delete = [resolve_mmi_object(k) for k in ('MMI_AAAA', 'MMI_AAA', 'MMI_AA')]
+
         for target in objects_to_delete:
             if target is not None:
                 delete_object(target.name)
