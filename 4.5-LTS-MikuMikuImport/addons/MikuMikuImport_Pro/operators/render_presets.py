@@ -81,6 +81,40 @@ class Render2Operator(bpy.types.Operator):
         # 只保留路径
         print("路径:", directory_path)
 
+        # 获取当前运行的Py文件的路径
+        current_file_path = __file__
+        # 获取当前Py文件所在的文件夹路径
+        new_path = os.path.dirname(current_file_path)
+        # 将当前文件夹路径和文件名组合成完整的文件路径
+        file = 'bhp.blend'
+        new_file_path = os.path.join(new_path, file)
+        print(new_file_path)
+
+        def Additional_actions(A, B, bhp=False):
+            """ 追加集合操作 """
+            # 指定要追加的集合的名称
+            collection_name = A
+            directory = B
+
+            # 构建集合的完整路径
+            full_filepath = os.path.join(self.filepath, directory, collection_name)
+
+            if bhp:
+                full_filepath = new_file_path
+                self.filepath = new_file_path
+
+            # 执行追加操作
+            bpy.ops.wm.append(
+                filepath=full_filepath,
+                directory=os.path.join(self.filepath, directory),
+                filename=collection_name
+            )
+
+        # 检查文件里是否有 MMI-自动描边 几何节点
+        if bpy.data.node_groups.get("MMI-自动描边") is None:
+            # 追加 MMI-自动描边 几何节点
+            Additional_actions('MMI-自动描边','NodeTree', bhp=True)
+
         # 获取当前活动的物体
         active_object = bpy.context.view_layer.objects.active
 
@@ -165,21 +199,6 @@ class Render2Operator(bpy.types.Operator):
             print("没有活动物体被选中！")
             self.report({'WARNING'}, f"没有活动物体被选中！")
             return {'FINISHED'}
-
-        def Additional_actions(A, B):
-            """ 追加集合操作 """
-            # 指定要追加的集合的名称
-            collection_name = A
-            directory = B
-
-            # 构建集合的完整路径
-            full_filepath = os.path.join(self.filepath, directory, collection_name)
-            # 执行追加操作
-            bpy.ops.wm.append(
-                filepath=full_filepath,
-                directory=os.path.join(self.filepath, directory),
-                filename=collection_name
-            )
 
         def Snap_and_move_object_matrix(obj1, obj2):
             """ 对象矩阵对齐和移动, obj1是obj2的父级 """
