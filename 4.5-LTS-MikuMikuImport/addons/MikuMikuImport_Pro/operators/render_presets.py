@@ -792,9 +792,12 @@ class Render2Operator(bpy.types.Operator):
         stroke_weight_transferred = False
         if (template_mesh_obj is not None and active_object is not None
                 and active_object.type == 'MESH' and template_mesh_obj.type == 'MESH'
+                and template_mesh_obj.vertex_groups.get("描边权重") is not None
                 and active_object.data != template_mesh_obj.data
                 and same_topology(active_object.data, template_mesh_obj.data)):
-            stroke_weight_transferred = transfer_stroke_weight(template_mesh_obj, active_object)
+            stroke_weight_transferred = transfer_stroke_weight(template_mesh_obj, active_object) # 传递"描边权重"顶点组权重
+        else:
+            print("模板没有'描边权重'顶点组或网格不一致，描边厚度使用常数值")
 
         def delete_object(object_name):
             object_to_delete = bpy.data.objects.get(object_name)
