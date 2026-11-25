@@ -1759,7 +1759,7 @@ class EdgePreviewOperator(bpy.types.Operator):
 
             inputs = new_modifiers.node_group.interface.items_tree
 
-            # 描边厚度由"描边权重"顶点组驱动（直接写属性模式标志，避免 toggle 的状态依赖）
+            # 描边厚度由"描边权重"顶点组驱动
             thickness_input_id = inputs["描边厚度"].identifier
             new_modifiers[thickness_input_id + "_use_attribute"] = True
             new_modifiers[thickness_input_id + "_attribute_name"] = "描边权重"
