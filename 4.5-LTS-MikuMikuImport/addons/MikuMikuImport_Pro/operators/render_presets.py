@@ -67,6 +67,9 @@ class Render2Operator(bpy.types.Operator):
 
     def execute(self, context):
         global obj1, tyu, sun
+        sun = None  # 重置全局残留
+        obj1 = None  # 重置全局残留
+        tyu = None  # 重置全局残留
 
         mmi = context.object.mmi
         addon_prefs = context.preferences.addons[__addon_name__].preferences
@@ -90,7 +93,7 @@ class Render2Operator(bpy.types.Operator):
         new_file_path = os.path.join(new_path, file)
         print(new_file_path)
 
-        def Additional_actions(A, B, bhp=False):
+        def Additional_actions(A, B):
             """ 追加集合操作 """
             # 指定要追加的集合的名称
             collection_name = A
@@ -99,21 +102,12 @@ class Render2Operator(bpy.types.Operator):
             # 构建集合的完整路径
             full_filepath = os.path.join(self.filepath, directory, collection_name)
 
-            if bhp:
-                full_filepath = new_file_path
-                self.filepath = new_file_path
-
             # 执行追加操作
             bpy.ops.wm.append(
                 filepath=full_filepath,
                 directory=os.path.join(self.filepath, directory),
                 filename=collection_name
             )
-
-        # 检查文件里是否有 MMI-自动描边 几何节点
-        if bpy.data.node_groups.get("MMI-自动描边") is None:
-            # 追加 MMI-自动描边 几何节点
-            Additional_actions('MMI-自动描边','NodeTree', bhp=True)
 
         # 获取当前活动的物体
         active_object = bpy.context.view_layer.objects.active
@@ -229,7 +223,6 @@ class Render2Operator(bpy.types.Operator):
 
             return root_objects
 
-
         # 取消选择所有物体
         bpy.ops.object.select_all(action='DESELECT')
 
@@ -310,6 +303,17 @@ class Render2Operator(bpy.types.Operator):
                     print("日光灯名称：", obj3.name)
                     sun = obj3.name
 
+        # 追加失败（例如所选文件不是渲染预设、没有【MMD预设】集合）时直接中止，避免后续 NameError
+        if not mmi_object:
+            self.report({'WARNING'}, "追加失败：所选文件中没有【MMD预设】集合，请选择渲染预设 .blend 文件")
+            tyus.hide_set(hidden_state)
+            return {'CANCELLED'}
+
+        if sun is None:
+            self.report({'WARNING'}, "预设中没有日光（Sun）灯，无法继续")
+            tyus.hide_set(hidden_state)
+            return {'CANCELLED'}
+
         # 对齐矩阵
         for obj4 in Find_root_object(mmi_object):
 
@@ -361,6 +365,7 @@ class Render2Operator(bpy.types.Operator):
         thickness_rounded = None
         vertex = None
         Stroke_merging = None
+        new_modifier_mmi_mesh = None
 
         if self.Fuzzy == '1':
             # 检查物体是否存在
@@ -396,6 +401,11 @@ class Render2Operator(bpy.types.Operator):
                         for modifis in obj.modifiers:
                             # 检查修改器是不是几何节点
                             if modifis.type == 'NODES':
+                                # 记录新的几何节点
+                                new_modifier_mmi_mesh = modifis.node_group
+                                new_modifier_mmi_mesh.name = modifis.name + sun
+                                print(f"记录新的几何节点: {new_modifier_mmi_mesh}")
+
                                 # 通过接口索引设置参数
                                 inputs = modifis.node_group.interface.items_tree
                                 # 获取材质偏移
@@ -987,7 +997,7 @@ class Render2Operator(bpy.types.Operator):
                 if "MMI-边缘预览" not in obj.modifiers:
                     # 如果没有，添加一个Geometry Nodes修改器
                     new_modifier = obj.modifiers.new(name="MMI-边缘预览", type='NODES')
-                    new_modifier.node_group = bpy.data.node_groups["MMI-自动描边"]
+                    new_modifier.node_group = new_modifier_mmi_mesh
 
             inputs = new_modifier.node_group.interface.items_tree
 
@@ -998,8 +1008,10 @@ class Render2Operator(bpy.types.Operator):
                 new_modifier[thickness_input_id + "_use_attribute"] = True
                 new_modifier[thickness_input_id + "_attribute_name"] = "描边权重"
             else:
+                # 模板没有"描边权重"顶点组：保持常数厚度
                 new_modifier[thickness_input_id + "_use_attribute"] = False
                 new_modifier[thickness_input_id] = thickness_rounded
+
             obj.update_tag()  # 标记刷新，让 depsgraph 重建修改器输入状态
             new_modifier[inputs["翻转面"].identifier] = vertex
             new_modifier[inputs["材质偏移"].identifier] = material_offsets

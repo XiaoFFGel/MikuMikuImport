@@ -950,18 +950,18 @@ class MakePres4Operator(bpy.types.Operator):
         node_tree = scene.node_tree
 
         # 遍历所有节点
-        for node in node_tree.nodes:
-            print(node.name, node.type)
-            # 遍历所有节点的输入端口
-            if node.inputs:
-                for input in node.inputs:
-                    print(f"节点 {node.name} 的输入端口 {input.name} 类型为 {input.type}")
+        if False:
+            for node in node_tree.nodes:
+                print(node.name, node.type)
+                # 遍历所有节点的输入端口
+                if node.inputs:
+                    for input in node.inputs:
+                        print(f"节点 {node.name} 的输入端口 {input.name} 类型为 {input.type}")
 
-            # 遍历所有节点的输出端口
-            if node.outputs:
-                for output in node.outputs:
-                    print(f"节点 {node.name} 的输出端口 {output.name} 类型为 {output.type}")
-
+                # 遍历所有节点的输出端口
+                if node.outputs:
+                    for output in node.outputs:
+                        print(f"节点 {node.name} 的输出端口 {output.name} 类型为 {output.type}")
 
         # 获取合成节点
         output_node = None
@@ -1180,7 +1180,7 @@ class MakePrehOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context: bpy.types.Context):
         if context.active_object is not None:
-            if context.active_object.mmd_type == "ROOT":  # 检查是否为MMD根对象
+            if context.active_object.type == "EMPTY":  # 检查是否为空对象
                 return True
         return False
 
